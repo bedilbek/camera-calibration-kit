@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "points": [
+    [
+      [
+        515.098498046875,
+        285.093098828125
+      ],
+      [
+        779.7761464,
+        439.9129408
+      ]
+    ],
+    [
+      [
+        396.5858557781061,
+        287.724825647721
+      ],
+      [
+        700.1442082849801,
+        440.0006905426645
+      ]
+    ]
+  ],
+  "reference_m": 1.7117242768623688,
+  "host_grab_times": [],
+  "note": "Synthetic target; verifies software geometry, not hardware accuracy"
+}

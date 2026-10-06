@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calibration-demo"
+version = "0.1.0"
+description = "Two-camera ChArUco calibration and auditable 3D segment measurement"
+requires-python = ">=3.12,<3.13"
+# Wheel-compatible with Intel macOS 13. OpenCV 4.13 Intel wheels need macOS 14.
+dependencies = [
+    "numpy==2.2.6",
+    "opencv-contrib-python-headless==4.12.0.88",
+    "PySide6-Essentials==6.11.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[project.scripts]
+calibration-demo = "calibration_demo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.uv]
+# Reject source builds; never relax this to resolve a missing wheel.
+no-build = true
+# Run from src instead of building/installing the local editable package.
+package = false
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'"]
+
+[tool.uv.pip]
+only-binary = [":all:"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
