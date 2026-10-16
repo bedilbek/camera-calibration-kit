@@ -137,6 +137,49 @@ uv run --extra dev pytest -q
 uv sync --locked --extra dev
 ```
 
+## Live two-camera marker distance
+
+```bash
+uv run python run.py live
+# Or preselect the exported rig and OpenCV camera indices:
+uv run python run.py live --rig sessions/YOUR-SESSION/calibration.json --left-camera 0 --right-camera 1
+```
+
+In **sequential**, solve the relative pose and use **Save rig + report**. The exported
+`calibration.json` includes `R`, `T`, both intrinsic calibrations and the image resolution.
+In **live**, select that file (or paste its folder), then select the left/right camera
+indices and two distinct marker IDs. Optional independent intrinsic JSON inputs also
+accept session-folder paths; these verify the imported lenses against the saved rig.
+If they differ, solve/export the sequential pose again using the intended intrinsics.
+Use `uv run python run.py camera-properties --list` to inspect connected camera indices
+on macOS, then verify their order in the previews.
+
+Start previews and confirm that the left/right views match the calibration and the
+camera positions and lens settings are unchanged. Both cameras must be present at
+the exact poses used for extrinsic calibration, with matching resolution, focus and
+zoom; a one-camera sequential rehearsal alone cannot track moving targets live.
+Use the same AprilTag **36h11, two-border-bit** prints as the sequential app. Both
+selected IDs must be visible in both cameras. The readout measures the **distance
+between marker centers**, not an individual marker's edge length.
+
+The 3D view shows the two reconstructed points, connecting segment and midpoint
+distance in millimetres, in the left camera's coordinate system (X right, Y down,
+Z forward). Drag to orbit, use the wheel to zoom, and **Fit 3D view** to recenter.
+The view holds its framing as targets move. Missing tags, invalid triangulation,
+reprojection residual above 3 px, ray angle below 1 degree, stopped streams, or host
+frame age above 750 ms clear the measurement. These are diagnostic gates, not an
+accuracy guarantee. The confirmation checkbox gates the measurement after preview.
+
+Capture and marker detection run in a worker; a single replaceable result packet
+prevents a growing UI frame queue. Qt paints only two points and axes, with no new
+rendering dependencies. The UI polls at up to 60 Hz; actual processed pairs/s is
+displayed and depends on the cameras and machine. There is no temporal smoothing or
+per-frame Monte Carlo. Requested camera buffering may be ignored by the backend;
+host frame age cannot detect older frames retained inside a device/driver.
+Camera grab gap is a host diagnostic, **not exposure synchronization**. Move slowly
+and check several independently measured rigid distances before relying on physical
+accuracy. Live camera performance and accuracy require a hardware trial.
+
 ## Files you need to know
 
 | Path | Purpose |

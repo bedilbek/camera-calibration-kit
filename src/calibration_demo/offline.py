@@ -99,12 +99,19 @@ def calibrate(left_intrinsic, right_intrinsic, left_board_image, right_board_ima
     return rig
 
 
-def detect_tags(image, ids=None):
+def tag_detector():
     """Detect centers of the supplied two-border-bit Kalibr AprilTag prints."""
     parameters = cv2.aruco.DetectorParameters()
     parameters.markerBorderBits = 2
     family = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-    corners, found_ids, _ = cv2.aruco.ArucoDetector(family, parameters).detectMarkers(image)
+    return cv2.aruco.ArucoDetector(family, parameters)
+
+
+def detect_tags(image, ids=None, *, detector=None):
+    """Find physical tag centers; optionally reuse a detector for streaming."""
+    if detector is None:
+        detector = tag_detector()
+    corners, found_ids, _ = detector.detectMarkers(image)
     if found_ids is None:
         raise ValueError("No AprilTag 36h11 markers found")
     detections = {}

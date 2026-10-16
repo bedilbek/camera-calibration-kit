@@ -78,6 +78,10 @@ def main():
     gui.add_argument("--camera", type=int, default=0, help="Left/single camera index (default: 0)")
     gui.add_argument("--screenshot", help=argparse.SUPPRESS)
     sub.add_parser("sequential", help="Offline-first one-camera/two-position stereo workflow")
+    live = sub.add_parser("live", help="Live two-camera AprilTag distance and interactive 3D view")
+    live.add_argument("--rig", help="Sequential calibration.json or its containing folder")
+    live.add_argument("--left-camera", type=int, default=0)
+    live.add_argument("--right-camera", type=int, default=1)
     board = sub.add_parser("board")
     board.add_argument("--output", default="charuco.png")
     board.add_argument("--columns", type=int, default=7)
@@ -140,6 +144,10 @@ def main():
         from .offline_gui import launch
 
         raise SystemExit(launch())
+    if args.command == "live":
+        from .live_gui import launch
+
+        raise SystemExit(launch(args.rig, args.left_camera, args.right_camera))
     if args.command == "board":
         Board(
             squares_x=args.columns,
