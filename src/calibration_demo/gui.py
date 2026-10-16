@@ -10,12 +10,15 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -26,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from .calibration import Board, detect, intrinsic, stereo
+from .camera_identity import normalize_usb_id, suggested_usb_camera, usb_devices
 from .capture import CaptureWorker
 from .geometry import Rig, measure
 
@@ -93,7 +97,7 @@ class ImagePane(QGraphicsView):
 class Window(QMainWindow):
     def __init__(self, session_root=None):
         super().__init__()
-        self.setWindowTitle("Calibration Lab | two cameras, one metric world")
+        self.setWindowTitle("Calibration Lab | camera calibration and 3D measurement")
         self.resize(1500, 920)
         self.worker = None
         self.latest = None
@@ -104,6 +108,9 @@ class Window(QMainWindow):
         self.pairs = []
         self.board = Board()
         self.report = None
+        self.review_windows = []
+        self.capture_ids = None
+        self.verified_capture_ids = set()
         self.root = Path(
             session_root or ("sessions/" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
         )
@@ -116,11 +123,16 @@ class Window(QMainWindow):
             )
         )
         row = QHBoxLayout()
+        self.single_camera = QCheckBox("Single camera (intrinsics)")
+        row.addWidget(self.single_camera)
         self.ids = [QSpinBox(), QSpinBox()]
         self.ids[1].setValue(1)
+        self.camera_labels = []
         for label, box in zip(("Left camera", "Right camera"), self.ids):
             box.setRange(0, 30)
-            row.addWidget(QLabel(label))
+            camera_label = QLabel(label)
+            self.camera_labels.append(camera_label)
+            row.addWidget(camera_label)
             row.addWidget(box)
         self.width, self.height = QSpinBox(), QSpinBox()
         for label, box, value in [("Width", self.width, 1280), ("Height", self.height, 720)]:
@@ -134,14 +146,61 @@ class Window(QMainWindow):
             ("Freeze / resume", self.freeze),
             ("Open session", self.open_session),
         ]:
-            self.button(row, title, fn)
+            button = self.button(row, title, fn)
+            if title == "Start cameras":
+                self.start_button = button
         layout.addLayout(row)
+        identity_row = QHBoxLayout()
+        self.usb_ids = [QLineEdit(), QLineEdit()]
+        self.usb_labels = [QLabel("Camera USB ID"), QLabel("Right USB ID")]
+        self.usb_confirms = [QCheckBox("Preview matches ID"), QCheckBox("Preview matches ID")]
+        for label, field, confirm in zip(self.usb_labels, self.usb_ids, self.usb_confirms):
+            field.setPlaceholderText("usb:VID:PID:SERIAL (run: uv run python run.py camera-id)")
+            field.textChanged.connect(lambda _text, box=confirm: box.setChecked(False))
+            confirm.setEnabled(False)
+            identity_row.addWidget(label)
+            identity_row.addWidget(field)
+            identity_row.addWidget(confirm)
+        layout.addLayout(identity_row)
         row = QHBoxLayout()
+        self.squares_x, self.squares_y = QSpinBox(), QSpinBox()
+        for label, box, value in (
+            ("Board columns", self.squares_x, 7),
+            ("Rows", self.squares_y, 5),
+        ):
+            box.setRange(3, 30)
+            box.setValue(value)
+            row.addWidget(QLabel(label))
+            row.addWidget(box)
         self.square = QDoubleSpinBox()
         self.square.setRange(5, 200)
         self.square.setValue(40)
-        row.addWidget(QLabel("7×5 board square (mm)"))
+        row.addWidget(QLabel("Square (mm)"))
         row.addWidget(self.square)
+        self.marker = QDoubleSpinBox()
+        self.marker.setRange(1, 199)
+        self.marker.setValue(28)
+        row.addWidget(QLabel("Marker (mm)"))
+        row.addWidget(self.marker)
+        self.dictionary = QComboBox()
+        self.dictionary.addItems(
+            [
+                "DICT_4X4_50",
+                "DICT_4X4_100",
+                "DICT_4X4_250",
+                "DICT_4X4_1000",
+                "DICT_5X5_100",
+                "DICT_5X5_250",
+                "DICT_6X6_250",
+                "DICT_7X7_250",
+            ]
+        )
+        self.dictionary.setCurrentText("DICT_4X4_100")
+        row.addWidget(QLabel("Dictionary"))
+        row.addWidget(self.dictionary)
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        self.stereo_controls = []
         for title, fn in [
             ("Save board PNG", self.save_board),
             ("Capture left board", lambda: self.capture_board(0)),
@@ -150,34 +209,45 @@ class Window(QMainWindow):
             ("Capture stereo board", self.capture_pair),
             ("Solve stereo", self.solve_stereo),
         ]:
-            self.button(row, title, fn)
+            button = self.button(row, title, fn)
+            if title == "Capture left board":
+                self.capture_left_button = button
+            if title in ("Capture right board", "Capture stereo board", "Solve stereo"):
+                self.stereo_controls.append(button)
         layout.addLayout(row)
         row = QHBoxLayout()
         for title, fn in [
             ("Load calibration", self.load_rig),
             ("Save calibration", self.save_rig),
             ("Load intrinsics", self.load_intrinsics),
+            ("Review intrinsics", self.open_review),
             ("Reset samples", self.reset_samples),
             ("Clear points", self.clear_points),
             ("Fit images", self.fit_images),
         ]:
             self.button(row, title, fn)
         layout.addLayout(row)
-        layout.addWidget(
-            QLabel(
-                "Freeze first. Ctrl+click A then B in EACH image. Wheel: zoom. Drag: pan. Right click: undo."
-            )
+        self.workflow_hint = QLabel(
+            "Freeze first. Ctrl+click A then B in EACH image. Wheel: zoom. Drag: pan. Right click: undo."
         )
+        layout.addWidget(self.workflow_hint)
         row = QHBoxLayout()
         self.panes = [ImagePane(), ImagePane()]
+        self.pane_containers = []
+        self.pane_labels = []
         for name, pane in zip(("LEFT • A then B", "RIGHT • same A then same B"), self.panes):
-            col = QVBoxLayout()
-            col.addWidget(QLabel(name))
+            container = QWidget()
+            col = QVBoxLayout(container)
+            label = QLabel(name)
+            self.pane_containers.append(container)
+            self.pane_labels.append(label)
+            col.addWidget(label)
             col.addWidget(pane)
-            row.addLayout(col)
+            row.addWidget(container)
             pane.changed.connect(self.invalidate_report)
         layout.addLayout(row, 1)
-        row = QHBoxLayout()
+        self.measurement_controls = QWidget()
+        row = QHBoxLayout(self.measurement_controls)
         self.reference = QDoubleSpinBox()
         self.reference.setRange(0, 1000)
         self.reference.setDecimals(4)
@@ -187,7 +257,7 @@ class Window(QMainWindow):
         row.addWidget(self.reference)
         self.button(row, "Measure A–B", self.calculate)
         self.button(row, "Export session + result", self.export_session)
-        layout.addLayout(row)
+        layout.addWidget(self.measurement_controls)
         self.readout = QLabel("Freeze a calibrated pair to measure A–B")
         self.readout.setStyleSheet(
             "font-size: 27px; font-weight: bold; color: #187BC1; padding: 8px;"
@@ -199,17 +269,57 @@ class Window(QMainWindow):
         self.log.setMaximumHeight(190)
         layout.addWidget(self.log)
         self.setCentralWidget(host)
+        self.single_camera.toggled.connect(self.change_capture_mode)
         self.say(
             "Use the synthetic session to rehearse without cameras. Calibrate at the exact working resolution."
         )
-        self.setStyleSheet(
-            "QWidget {font-size: 13px;} QPushButton {padding: 6px;} QMainWindow {background:#f4f6f8;}"
-        )
+        self.setStyleSheet("QWidget {font-size: 13px;} QPushButton {padding: 6px;}")
 
     def button(self, row, text, fn):
         b = QPushButton(text)
         b.clicked.connect(lambda: self.guard(fn))
         row.addWidget(b)
+        return b
+
+    def change_capture_mode(self):
+        single = self.single_camera.isChecked()
+        self.camera_labels[0].setText("Camera" if single else "Left camera")
+        self.camera_labels[1].setVisible(not single)
+        self.usb_labels[1].setVisible(not single)
+        self.usb_ids[1].setVisible(not single)
+        self.usb_confirms[1].setVisible(not single)
+        self.ids[1].setEnabled(not single)
+        self.ids[1].setVisible(not single)
+        self.start_button.setText("Start camera" if single else "Start cameras")
+        self.capture_left_button.setText("Capture board photo" if single else "Capture left board")
+        self.pane_containers[1].setVisible(not single)
+        self.measurement_controls.setVisible(not single)
+        self.pane_labels[0].setText("CAMERA • calibration board" if single else "LEFT • A then B")
+        self.workflow_hint.setText(
+            "Start camera → verify preview and USB ID → capture 20–30 board views → solve intrinsics."
+            if single
+            else "Freeze first. Ctrl+click A then B in EACH image. Wheel: zoom. Drag: pan. Right click: undo."
+        )
+        for control in self.stereo_controls:
+            control.setEnabled(not single)
+            control.setVisible(not single)
+        self.latest = None
+        self.frozen = False
+        self.reset_samples()
+        if single and not self.usb_ids[0].text().strip():
+            try:
+                suggested = suggested_usb_camera(usb_devices())
+            except Exception:
+                suggested = None
+            if suggested:
+                self.usb_ids[0].setText(suggested)
+                self.say("USB ID suggested. Check the live preview before you confirm it.")
+        for pane in self.panes:
+            pane.points = []
+            pane.image = None
+            pane.scene().clear()
+        self.invalidate_report()
+        self.say("Capture mode changed. Collect new observations for the selected camera(s).")
 
     def guard(self, fn):
         try:
@@ -223,24 +333,47 @@ class Window(QMainWindow):
 
     def invalidate_report(self, *_):
         self.report = None
-        self.readout.setText("Select matching A and B, then measure")
+        self.readout.setText(
+            "Collect 20–30 diverse board views, then solve intrinsics"
+            if self.single_camera.isChecked()
+            else "Select matching A and B, then measure"
+        )
 
     def image_size(self):
         return self.width.value(), self.height.value()
 
     def current_board(self):
-        b = Board(square_m=self.square.value() / 1000, marker_m=self.square.value() * 0.7 / 1000)
+        b = Board(
+            squares_x=self.squares_x.value(),
+            squares_y=self.squares_y.value(),
+            square_m=self.square.value() / 1000,
+            marker_m=self.marker.value() / 1000,
+            dictionary=self.dictionary.currentText(),
+        )
+        if b.marker_m >= b.square_m:
+            raise ValueError("Marker size must be smaller than board square size")
         if b != self.board:
             if any(self.observations) or self.pairs or any(x is not None for x in self.intrinsics):
-                raise ValueError("Reset samples before changing board size")
+                raise ValueError("Reset samples before changing board dimensions")
             self.board = b
         return b
 
     def start(self):
         if self.worker is not None:
             raise ValueError("Stop existing cameras first")
-        ids = [x.value() for x in self.ids]
-        if ids[0] == ids[1]:
+        ids = [x.value() for x in self.ids[: 1 if self.single_camera.isChecked() else 2]]
+        identities = [
+            normalize_usb_id(field.text()) if field.text().strip() else None
+            for field in self.usb_ids[: len(ids)]
+        ]
+        present = {device["id"] for device in usb_devices()} if any(identities) else set()
+        if any(identity not in present for identity in identities if identity):
+            raise ValueError("The entered USB camera ID is not connected. Run camera-id again.")
+        if len(identities) == 2 and identities[0] and identities[0] == identities[1]:
+            raise ValueError("The two camera IDs must differ")
+        if any(self.observations) and self.capture_ids != identities:
+            raise ValueError("Camera ID changed while samples exist. Reset samples first.")
+        if len(ids) == 2 and ids[0] == ids[1]:
             raise ValueError("Choose two different camera indices")
         if self.rig and self.rig.metadata.get("synthetic"):
             raise ValueError(
@@ -252,14 +385,24 @@ class Window(QMainWindow):
         self.frozen = False
         self.clear_points()
         self.worker = CaptureWorker(ids, self.image_size())
+        self.capture_ids = identities
+        for confirm in self.usb_confirms:
+            confirm.setChecked(False)
+            confirm.setEnabled(False)
         self.worker.frames.connect(self.on_frames)
         self.worker.failure.connect(self.on_failure)
         self.worker.start()
-        for control in [*self.ids, self.width, self.height]:
+        for control in [self.single_camera, *self.ids, *self.usb_ids, self.width, self.height]:
             control.setEnabled(False)
         self.say(
             "Capture started. Verify autofocus is locked and camera order matches calibration."
         )
+        if any(identity is None for identity in identities):
+            self.say(
+                "Camera USB ID is missing. This session cannot prove physical camera identity."
+            )
+        else:
+            self.say("When the preview appears, check Preview matches ID before board capture.")
 
     def stop(self):
         if self.worker:
@@ -268,8 +411,9 @@ class Window(QMainWindow):
                 self.say("Camera backend is still stopping; wait before restarting.")
                 return False
             self.worker = None
-        for control in [*self.ids, self.width, self.height]:
+        for control in [self.single_camera, *self.ids, *self.usb_ids, self.width, self.height]:
             control.setEnabled(True)
+        self.ids[1].setEnabled(not self.single_camera.isChecked())
         return True
 
     def on_failure(self, text):
@@ -283,6 +427,9 @@ class Window(QMainWindow):
             return
         first = self.latest is None
         self.latest = packet
+        if first:
+            for index, confirm in enumerate(self.usb_confirms[: len(packet[0])]):
+                confirm.setEnabled(bool(self.capture_ids and self.capture_ids[index]))
         for pane, img in zip(self.panes, packet[0]):
             pane.annotating = False
             pane.show_image(img, fit=first)
@@ -303,31 +450,67 @@ class Window(QMainWindow):
 
     def capture_board(self, index):
         images = self.require_frames()
+        if index >= len(images):
+            raise ValueError("Only one camera is active; use Capture board photo")
+        if self.capture_ids and self.capture_ids[index]:
+            if not self.usb_confirms[index].isChecked():
+                raise ValueError("Check the live preview, then select Preview matches ID")
         board = self.current_board()
         if self.frozen:
             raise ValueError("Resume before collecting a new pose")
         obs = detect(images[index], board)
-        self.observations[index].append(obs)
         folder = self.root / f"intrinsic_{index}"
         folder.mkdir(exist_ok=True)
-        cv2.imwrite(str(folder / f"{len(self.observations[index]):03d}.png"), images[index])
+        image_path = folder / f"{len(self.observations[index]) + 1:03d}.png"
+        if image_path.exists():
+            raise FileExistsError(
+                f"Camera image already exists: {image_path}. Start a new session."
+            )
+        if not cv2.imwrite(str(image_path), images[index]):
+            raise OSError(f"Cannot save camera image: {image_path}")
+        self.observations[index].append(obs)
+        if self.capture_ids and self.capture_ids[index]:
+            self.verified_capture_ids.add(index)
         self.say(
             f"Camera {index}: {len(self.observations[index])} views; {len(obs[0])} corners. Vary tilt, depth and coverage."
         )
+        if self.single_camera.isChecked():
+            self.readout.setText(
+                f"{len(self.observations[index])} board views captured — aim for 20–30"
+            )
 
     def solve_intrinsics(self):
         self.current_board()
-        self.intrinsics = [intrinsic(o, self.image_size(), self.board) for o in self.observations]
+        count = 1 if self.single_camera.isChecked() else 2
+        solved = [intrinsic(o, self.image_size(), self.board) for o in self.observations[:count]]
+        self.intrinsics = solved + [None] * (2 - count)
         self.rig = None
         self.invalidate_report()
-        payload = [
-            dict(K=k.tolist(), d=d.tolist(), metadata=meta) for k, d, meta in self.intrinsics
-        ]
+        payload = [dict(K=k.tolist(), d=d.tolist(), metadata=meta) for k, d, meta in solved]
         (self.root / "intrinsics.json").write_text(
-            json.dumps(dict(board=vars(self.board), cameras=payload), indent=2)
+            json.dumps(
+                dict(
+                    board=vars(self.board),
+                    cameras=payload,
+                    camera_indices=[x.value() for x in self.ids[:count]],
+                    camera_identities=self.capture_ids or [None] * count,
+                    camera_identity_source=(
+                        "preview_confirmed_at_capture"
+                        if self.capture_ids
+                        and all(self.capture_ids)
+                        and all(index in self.verified_capture_ids for index in range(count))
+                        else "missing"
+                    ),
+                ),
+                indent=2,
+            )
         )
         self.say("Intrinsics saved: " + str(self.root / "intrinsics.json"))
-        self.say(json.dumps([x[2] for x in self.intrinsics], indent=2))
+        self.say(json.dumps([x[2] for x in solved], indent=2))
+        if count == 1:
+            self.readout.setText(
+                f"Intrinsics saved | {solved[0][2]['views']} views | RMS {solved[0][2]['rms_px']:.3f} px"
+            )
 
     def load_intrinsics(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load intrinsics", "", "JSON (*.json)")
@@ -336,20 +519,50 @@ class Window(QMainWindow):
             values = [
                 (np.asarray(c["K"]), np.asarray(c["d"]), c["metadata"]) for c in obj["cameras"]
             ]
-            if len(values) != 2 or any(tuple(v[2]["size"]) != self.image_size() for v in values):
-                raise ValueError("Need two calibrations at the selected resolution")
+            count = 1 if self.single_camera.isChecked() else 2
+            if len(values) != count or any(
+                tuple(v[2]["size"]) != self.image_size() for v in values
+            ):
+                raise ValueError(f"Need {count} calibration(s) at the selected resolution")
             self.board = Board(**obj["board"])
+            self.squares_x.setValue(self.board.squares_x)
+            self.squares_y.setValue(self.board.squares_y)
             self.square.setValue(self.board.square_m * 1000)
-            self.intrinsics = values
+            self.marker.setValue(self.board.marker_m * 1000)
+            if self.dictionary.findText(self.board.dictionary) < 0:
+                self.dictionary.addItem(self.board.dictionary)
+            self.dictionary.setCurrentText(self.board.dictionary)
+            self.intrinsics = values + [None] * (2 - count)
             self.pairs = []
             self.rig = None
             self.invalidate_report()
-            self.say("Intrinsics loaded. Capture new stereo poses with the cameras fixed.")
+            self.say(
+                "Single-camera intrinsics loaded."
+                if count == 1
+                else "Intrinsics loaded. Capture new stereo poses with the cameras fixed."
+            )
+
+    def open_review(self):
+        from .review_gui import ReviewWindow
+
+        session = self.root
+        if not (session / "intrinsics.json").is_file():
+            chosen = QFileDialog.getExistingDirectory(
+                self, "Choose a saved intrinsic session", "sessions"
+            )
+            if not chosen:
+                return
+            session = Path(chosen)
+        review = ReviewWindow(session)
+        self.review_windows.append(review)
+        review.show()
 
     def capture_pair(self):
         if self.frozen:
             raise ValueError("Resume and hold the board still for each capture")
         images = self.require_frames()
+        if len(images) != 2:
+            raise ValueError("Stereo calibration requires two cameras")
         board = self.current_board()
         pair = [detect(im, board) for im in images]
         if len(np.intersect1d(pair[0][0], pair[1][0])) < 6:
@@ -376,13 +589,19 @@ class Window(QMainWindow):
         )
 
     def reset_samples(self):
+        self.capture_ids = None
+        self.verified_capture_ids.clear()
         self.observations = [[], []]
         self.pairs = []
         self.intrinsics = [None, None]
         self.rig = None
         self.report = None
         self.board = Board(
-            square_m=self.square.value() / 1000, marker_m=self.square.value() * 0.7 / 1000
+            squares_x=self.squares_x.value(),
+            squares_y=self.squares_y.value(),
+            square_m=self.square.value() / 1000,
+            marker_m=self.marker.value() / 1000,
+            dictionary=self.dictionary.currentText(),
         )
         self.say("Samples and calibration reset. Saved files remain.")
 
@@ -392,7 +611,9 @@ class Window(QMainWindow):
         if path:
             b.write(path)
             self.say(
-                f"Print board area {b.square_m * 7000:g} × {b.square_m * 5000:g} mm. Verify square {b.square_m * 1000:g} mm. Mount flat."
+                f"Print board area {b.square_m * b.squares_x * 1000:g} × "
+                f"{b.square_m * b.squares_y * 1000:g} mm. "
+                f"Verify square {b.square_m * 1000:g} mm. Mount flat."
             )
 
     def load_rig(self):
@@ -489,6 +710,7 @@ class Window(QMainWindow):
             raise ValueError("Missing images or resolution mismatch")
         if not self.stop():
             raise ValueError("Wait for camera shutdown before loading a session")
+        self.single_camera.setChecked(False)
         self.rig = rig
         self.latest = (images, obj.get("host_grab_times", []))
         self.frozen = True
@@ -512,9 +734,11 @@ class Window(QMainWindow):
             event.ignore()
 
 
-def launch(session=None, screenshot=None):
+def launch(session=None, screenshot=None, single_camera=False, camera=0):
     app = QApplication.instance() or QApplication([])
     win = Window()
+    win.ids[0].setValue(camera)
+    win.single_camera.setChecked(single_camera)
     win.show()
     if session:
         win.read_session(session)

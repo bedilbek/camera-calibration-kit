@@ -17,9 +17,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.9"]
 
-[project.scripts]
-calibration-demo = "calibration_demo.cli:main"
-
 [tool.setuptools.packages.find]
 where = ["src"]
 

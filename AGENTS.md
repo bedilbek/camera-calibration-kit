@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-`src/calibration_demo/` contains the two-camera ChArUco calibration application:
+`src/calibration_demo/` contains single-camera intrinsic calibration and two-camera 3D measurement:
 - `geometry.py`: calibration schema, projection, triangulation, and diagnostics.
 - `calibration.py`: board generation/detection and intrinsic/stereo estimation.
 - `capture.py`: camera lifecycle and acquisition worker.
 - `gui.py` and `cli.py`: desktop workflow and command-line entry points.
 
-`tests/` holds geometry and Qt tests; `examples/` holds board and synthetic assets. `README.md` documents setup, calibration, and measurement workflows.
+`run.py` launches the app. `tests/` holds geometry and Qt tests; `examples/` holds board and synthetic assets. `README.md` documents setup and calibration.
 
 ## Build, Test, and Development Commands
 
@@ -16,10 +16,10 @@ Use CPython 3.12 with uv; `.python-version` selects it and `uv.lock` pins depend
 
 ```bash
 uv sync --locked --extra dev
-PYTHONPATH=src uv run python -m calibration_demo.cli gui --session examples/synthetic
+uv run python run.py gui --single-camera --camera 1
 ```
 
-- `PYTHONPATH=src uv run python -m calibration_demo.cli measure examples/synthetic`: replay measurement as JSON. Replace `measure ...` with `gui` for camera capture or `synthetic --output /tmp/calibration-sample` for disposable data.
+- `uv run python run.py measure examples/synthetic`: replay measurement as JSON. Use `gui --session examples/synthetic` for the sample GUI, or `synthetic --output /tmp/calibration-sample` for disposable data.
 - `uv run --extra dev pytest -q`: run all tests.
 - `uv run --extra dev ruff check .` and `uv run --extra dev ruff format --check .`: check lint and formatting.
 

@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 sessions/
+.DS_Store
+third-party/
+analysis/
+

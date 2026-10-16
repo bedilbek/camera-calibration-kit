@@ -14,15 +14,19 @@ class Board:
     squares_y: int = 5
     square_m: float = 0.04
     marker_m: float = 0.028
+    dictionary: str = "DICT_4X4_100"
 
     def create(self):
         if min(self.squares_x, self.squares_y) < 3 or not 0 < self.marker_m < self.square_m:
             raise ValueError("Board requires >=3 squares each axis and 0 < marker < square")
+        dictionary = getattr(cv2.aruco, self.dictionary, None)
+        if dictionary is None or not self.dictionary.startswith("DICT_"):
+            raise ValueError(f"Unknown ArUco dictionary: {self.dictionary}")
         return cv2.aruco.CharucoBoard(
             (self.squares_x, self.squares_y),
             self.square_m,
             self.marker_m,
-            cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100),
+            cv2.aruco.getPredefinedDictionary(dictionary),
         )
 
     def write(self, path):
