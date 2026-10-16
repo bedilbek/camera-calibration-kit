@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -25,20 +26,31 @@ from PySide6.QtWidgets import (
 )
 
 from .live import LiveWorker, load_live_rig
+from .view_geometry import camera_outline, look_at, observer_pose, rig_frame
 
 
 class SegmentView(QWidget):
-    """Small orthographic 3D viewer; repaint only on new data or mouse interaction."""
+    """Perspective observer above and behind the calibrated camera pair."""
 
     def __init__(self):
         super().__init__()
         self.setMinimumSize(420, 300)
         self.result = None
+        self.rig = None
         self.ids = (0, 1)
         self.center = None
-        self.radius_m = 0.25
-        self.yaw, self.pitch = -0.4, -0.35
+        self.behind_m = self.above_m = 0.7
+        self.yaw = self.pitch = 0.0
+        self.fov_deg = 65.0
         self.drag = None
+
+    def set_rig(self, rig):
+        self.rig = rig
+        self.result = None
+        self.center = None
+        self.yaw = self.pitch = 0.0
+        self.fov_deg = 65.0
+        self.update()
 
     def set_result(self, result, ids):
         self.result, self.ids = result, ids
@@ -46,38 +58,101 @@ class SegmentView(QWidget):
             self.fit()
         self.update()
 
-    def fit(self):
+    def set_offsets(self, behind_m, above_m):
+        self.behind_m, self.above_m = behind_m, above_m
+        self.yaw = self.pitch = 0.0
+        self.fit()
+
+    def pose(self):
+        eye, up, forward = observer_pose(
+            self.rig, self.behind_m, self.above_m, self.yaw, self.pitch
+        )
+        centers, _, _ = rig_frame(self.rig)
+        target = self.center if self.center is not None else centers.mean(axis=0) + forward
+        return eye, look_at(eye, target, up)
+
+    def scene_points(self):
+        points = np.vstack([camera_outline(self.rig, i) for i in (0, 1)])
         if self.result:
-            points = np.asarray(self.result["points_left_frame_m"])
-            self.center = points.mean(axis=0)
-            self.radius_m = max(float(np.linalg.norm(points[1] - points[0])) * 0.8, 0.05)
+            points = np.vstack([points, self.result["points_left_frame_m"]])
+        return points
+
+    def fit(self):
+        self.yaw = self.pitch = 0.0
+        if self.result:
+            self.center = np.asarray(self.result["points_left_frame_m"]).mean(axis=0)
+        if self.rig is not None:
+            eye, rotation = self.pose()
+            xyz = (rotation @ (self.scene_points() - eye).T).T
+            visible = xyz[xyz[:, 2] > 0.01]
+            if len(visible):
+                aspect = max(self.width(), 1) / max(self.height(), 1)
+                tangent = max(
+                    np.max(np.abs(visible[:, 0]) / visible[:, 2]) / aspect,
+                    np.max(np.abs(visible[:, 1]) / visible[:, 2]),
+                )
+                self.fov_deg = float(np.clip(np.degrees(2 * np.arctan(tangent * 1.4)), 25, 150))
         self.update()
 
     def screen(self, point):
-        cy, sy, cp, sp = np.cos(self.yaw), np.sin(self.yaw), np.cos(self.pitch), np.sin(self.pitch)
-        rotation = np.array([[cy, 0, sy], [sp * sy, cp, -sp * cy], [-cp * sy, sp, cp * cy]])
-        xyz = rotation @ (np.asarray(point) - self.center)
-        scale = min(self.width(), self.height()) * 0.36 / self.radius_m
-        return QPointF(self.width() / 2 + xyz[0] * scale, self.height() / 2 + xyz[1] * scale)
+        eye, rotation = self.pose()
+        xyz = rotation @ (np.asarray(point) - eye)
+        if xyz[2] <= 0.01:
+            return None
+        focal = self.height() / (2 * np.tan(np.radians(self.fov_deg) / 2))
+        return QPointF(
+            self.width() / 2 + xyz[0] * focal / xyz[2],
+            self.height() / 2 - xyz[1] * focal / xyz[2],
+        )
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor("#101b2b"))
         p.setPen(QColor("#b1c5db"))
-        p.drawText(18, 26, "3D • left camera coordinates")
-        p.drawText(18, self.height() - 18, "Drag to orbit · Wheel to zoom · Fit view to recenter")
+        mode = "Observer preset" if self.yaw == self.pitch == 0 else "Orbit view"
+        p.drawText(18, 26, f"3D · {mode} · level cameras assumed")
+        p.drawText(
+            18,
+            49,
+            f"Preset: {self.behind_m * 100:.0f} cm behind / {self.above_m * 100:.0f} cm above",
+        )
+        p.drawText(
+            18, self.height() - 18, "Drag to orbit · Wheel to zoom · Fit 3D view restores observer"
+        )
+        if self.rig is None:
+            p.drawText(
+                self.rect(), Qt.AlignmentFlag.AlignCenter, "Start previews to load camera geometry"
+            )
+            return
+        # Keep geometry and labels out of the view captions.
+        p.setClipRect(QRectF(0, 60, self.width(), max(self.height() - 95, 1)))
+        centers, _, _ = rig_frame(self.rig)
+        a, b = [self.screen(point) for point in centers]
+        p.setPen(QPen(QColor("#6b8197"), 1, Qt.PenStyle.DashLine))
+        if a is not None and b is not None:
+            p.drawLine(a, b)
+            p.drawText(
+                (a + b) / 2 + QPointF(0, 20),
+                f"Cameras: {np.linalg.norm(centers[1] - centers[0]) * 100:.1f} cm",
+            )
+        for camera, color, title in ((0, "#6ae4c5", "Left camera"), (1, "#7eb9ff", "Right camera")):
+            points = [self.screen(point) for point in camera_outline(self.rig, camera)]
+            p.setPen(QPen(QColor(color), 1.5))
+            for i, j in ((0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (2, 3), (3, 4), (4, 1)):
+                if points[i] is not None and points[j] is not None:
+                    p.drawLine(points[i], points[j])
+            if points[0] is not None:
+                p.setBrush(QColor(color))
+                p.drawEllipse(points[0], 5, 5)
+                p.drawText(points[0] + QPointF(8, -12), title)
         if not self.result:
+            p.setPen(QColor("#b1c5db"))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for a valid marker pair")
             return
-        for i, (label, color) in enumerate(zip(("X", "Y", "Z"), ("#ef798a", "#79d6ad", "#72adff"))):
-            endpoint = self.center.copy()
-            endpoint[i] += self.radius_m * 0.65
-            p.setPen(QPen(QColor(color), 1.5))
-            p.drawLine(self.screen(self.center), self.screen(endpoint))
-            p.drawText(self.screen(endpoint) + QPointF(5, -5), label)
-        points = np.asarray(self.result["points_left_frame_m"])
-        a, b = [self.screen(point) for point in points]
+        a, b = [self.screen(point) for point in self.result["points_left_frame_m"]]
+        if a is None or b is None:
+            return
         p.setPen(QPen(QColor("#f5d474"), 3))
         p.drawLine(a, b)
         for marker_id, pos, color in zip(self.ids, (a, b), ("#6ae4c5", "#7eb9ff")):
@@ -85,13 +160,12 @@ class SegmentView(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.drawEllipse(pos, 8, 8)
             p.setPen(QColor("#eef5ff"))
-            p.drawText(pos + QPointF(12, -12), f"ID {marker_id}")
+            p.drawText(pos + QPointF(12, 22), f"ID {marker_id}")
         midpoint = (a + b) / 2
-        label = f"{self.result['length_m'] * 100:.0f} cm"
-        box = QRectF(midpoint.x() - 75, midpoint.y() - 34, 150, 26)
+        box = QRectF(midpoint.x() - 65, midpoint.y() - 34, 130, 26)
         p.fillRect(box, QColor("#25384d"))
         p.setPen(QColor("#ffffff"))
-        p.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
+        p.drawText(box, Qt.AlignmentFlag.AlignCenter, f"{self.result['length_m'] * 100:.0f} cm")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -101,7 +175,7 @@ class SegmentView(QWidget):
         if self.drag is not None:
             delta = event.position() - self.drag
             self.yaw += delta.x() * 0.01
-            self.pitch = float(np.clip(self.pitch + delta.y() * 0.01, -1.5, 1.5))
+            self.pitch = float(np.clip(self.pitch + delta.y() * 0.01, -1.0, 1.0))
             self.drag = event.position()
             self.update()
 
@@ -109,9 +183,7 @@ class SegmentView(QWidget):
         self.drag = None
 
     def wheelEvent(self, event):
-        self.radius_m = float(
-            np.clip(self.radius_m * 0.85 ** (event.angleDelta().y() / 120), 0.005, 100)
-        )
+        self.fov_deg = float(np.clip(self.fov_deg * 0.9 ** (event.angleDelta().y() / 120), 15, 150))
         self.update()
 
 
@@ -199,6 +271,20 @@ class LiveWindow(QMainWindow):
         splitter.addWidget(self.view)
         splitter.setSizes([540, 700])
         layout.addWidget(splitter, 1)
+        observer_controls = QHBoxLayout()
+        self.observer_offsets = []
+        for title in ("Observer behind", "Observer above"):
+            observer_controls.addWidget(QLabel(title))
+            field = QDoubleSpinBox()
+            field.setRange(5, 500)
+            field.setValue(70)
+            field.setSuffix(" cm")
+            field.valueChanged.connect(self.update_observer)
+            observer_controls.addWidget(field)
+            self.observer_offsets.append(field)
+        observer_controls.addWidget(QLabel("Ground-up assumes level cameras"))
+        observer_controls.addStretch()
+        layout.addLayout(observer_controls)
         self.status = QLabel("Load a sequential rig, select camera indices and two AprilTag IDs.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -211,6 +297,9 @@ class LiveWindow(QMainWindow):
         self.timer.setInterval(16)
         self.timer.timeout.connect(self.poll)
         self.timer.start()
+
+    def update_observer(self, *_):
+        self.view.set_offsets(*(field.value() / 100 for field in self.observer_offsets))
 
     def browse(self, key):
         path, _ = QFileDialog.getOpenFileName(
@@ -239,7 +328,7 @@ class LiveWindow(QMainWindow):
             return
         self.rig = rig
         self.confirm.setChecked(False)
-        self.view.center = None
+        self.view.set_rig(rig)
         self.last_capture = monotonic()
         self.stopping = False
         self.worker = LiveWorker(cameras, rig, ids)

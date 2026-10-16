@@ -162,16 +162,27 @@ Use the same AprilTag **36h11, two-border-bit** prints as the sequential app. Bo
 selected IDs must be visible in both cameras. The readout measures the **distance
 between marker centers**, not an individual marker's edge length.
 
-The 3D view shows the two reconstructed points, connecting segment and midpoint
-distance rounded to whole centimetres, in the left camera's coordinate system (X right, Y down,
-Z forward). Drag to orbit, use the wheel to zoom, and **Fit 3D view** to recenter.
-The view holds its framing as targets move. Missing tags, invalid triangulation,
+The perspective 3D view shows both calibrated camera lenses and short viewing frustums,
+the camera separation, and both reconstructed marker centers with their connecting segment
+and distance rounded to whole centimetres. Its observer starts **70 cm behind and 70 cm
+above the midpoint between the lenses**, looking toward the marker midpoint. For now,
+**both cameras are assumed level**: their average optical up defines ground-up, and their
+average viewing direction projected onto that assumed ground plane defines forward.
+No floor height or gravity direction is measured. All geometry uses the left camera's
+coordinate system (X right, Y down, Z forward); the right lens is at `-R.T @ T`.
+
+Adjust **Observer behind/above** in centimetres. Drag to orbit and use the wheel to change
+the field of view. **Fit 3D view** restores the observer position and frames the cameras
+and current markers by changing the field of view, without moving the observer farther
+away. Frustum outlines illustrate each lens's calibrated corner rays at a short 25 cm
+depth, not its maximum range. The view holds its aim as targets move until Fit is pressed.
+Missing tags, invalid triangulation,
 reprojection residual above 3 px, ray angle below 1 degree, stopped streams, or host
 frame age above 750 ms clear the measurement. These are diagnostic gates, not an
 accuracy guarantee. The confirmation checkbox gates the measurement after preview.
 
 Capture and marker detection run in a worker; a single replaceable result packet
-prevents a growing UI frame queue. Qt paints only two points and axes, with no new
+prevents a growing UI frame queue. Qt paints the camera outlines and marker segment, with no new
 rendering dependencies. The UI polls at up to 60 Hz; actual processed pairs/s is
 displayed and depends on the cameras and machine. There is no temporal smoothing or
 per-frame Monte Carlo. Requested camera buffering may be ignored by the backend;

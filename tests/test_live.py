@@ -141,6 +141,7 @@ def test_live_ui_confirmation_missing_and_stale_frames_clear_distance(scene, tmp
     app = QApplication.instance() or QApplication([])
     rig, _, images = scene
     window = LiveWindow()
+    window.view.set_rig(rig)
     window.show()
     app.processEvents()
     packet = process_pair(rig, images, (0, 1))
@@ -154,7 +155,7 @@ def test_live_ui_confirmation_missing_and_stale_frames_clear_distance(scene, tmp
     QTest.mousePress(window.view, Qt.MouseButton.LeftButton, pos=QPoint(200, 150))
     QTest.mouseMove(window.view, QPoint(250, 170))
     QTest.mouseRelease(window.view, Qt.MouseButton.LeftButton, pos=QPoint(250, 170))
-    assert window.view.yaw != -0.4
+    assert window.view.yaw != 0.0
     app.processEvents()
     assert window.grab().save(str(tmp_path / "live-preview.png"))
     window.show_packet({**packet, "result": None, "status": "Missing IDs"})
