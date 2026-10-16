@@ -150,7 +150,7 @@ def test_live_ui_confirmation_missing_and_stale_frames_clear_distance(scene, tmp
     window.confirm.setChecked(True)
     window.show_packet(packet)
     assert window.view.result is not None
-    assert "mm" in window.readout.text()
+    assert window.readout.text() == f"{packet['result']['length_m'] * 100:.0f} cm"
     QTest.mousePress(window.view, Qt.MouseButton.LeftButton, pos=QPoint(200, 150))
     QTest.mouseMove(window.view, QPoint(250, 170))
     QTest.mouseRelease(window.view, Qt.MouseButton.LeftButton, pos=QPoint(250, 170))

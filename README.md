@@ -163,7 +163,7 @@ selected IDs must be visible in both cameras. The readout measures the **distanc
 between marker centers**, not an individual marker's edge length.
 
 The 3D view shows the two reconstructed points, connecting segment and midpoint
-distance in millimetres, in the left camera's coordinate system (X right, Y down,
+distance rounded to whole centimetres, in the left camera's coordinate system (X right, Y down,
 Z forward). Drag to orbit, use the wheel to zoom, and **Fit 3D view** to recenter.
 The view holds its framing as targets move. Missing tags, invalid triangulation,
 reprojection residual above 3 px, ray angle below 1 degree, stopped streams, or host

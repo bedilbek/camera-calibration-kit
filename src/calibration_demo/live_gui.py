@@ -65,7 +65,7 @@ class SegmentView(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor("#101b2b"))
         p.setPen(QColor("#b1c5db"))
-        p.drawText(18, 26, "3D • left camera coordinates (metres)")
+        p.drawText(18, 26, "3D • left camera coordinates")
         p.drawText(18, self.height() - 18, "Drag to orbit · Wheel to zoom · Fit view to recenter")
         if not self.result:
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for a valid marker pair")
@@ -87,7 +87,7 @@ class SegmentView(QWidget):
             p.setPen(QColor("#eef5ff"))
             p.drawText(pos + QPointF(12, -12), f"ID {marker_id}")
         midpoint = (a + b) / 2
-        label = f"{self.result['length_m'] * 1000:.1f} mm"
+        label = f"{self.result['length_m'] * 100:.0f} cm"
         box = QRectF(midpoint.x() - 75, midpoint.y() - 34, 150, 26)
         p.fillRect(box, QColor("#25384d"))
         p.setPen(QColor("#ffffff"))
@@ -277,7 +277,7 @@ class LiveWindow(QMainWindow):
         valid = result is not None and fresh and self.confirm.isChecked()
         ids = tuple(field.value() for field in self.marker_ids)
         if valid:
-            self.readout.setText(f"{result['length_m'] * 1000:.1f} mm")
+            self.readout.setText(f"{result['length_m'] * 100:.0f} cm")
             self.view.set_result(result, ids)
         else:
             self.clear_measurement()
