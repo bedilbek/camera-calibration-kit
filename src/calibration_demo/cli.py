@@ -94,6 +94,17 @@ def main():
         "session", nargs="?", help="Session folder (default: latest with intrinsics)"
     )
     sub.add_parser("camera-id", help="List USB vendor/product/serial identifiers on this Mac")
+    properties = sub.add_parser(
+        "camera-properties", help="Read macOS camera formats and USB UVC control values/ranges"
+    )
+    selector = properties.add_mutually_exclusive_group()
+    selector.add_argument("--camera", type=int, help="OpenCV AVFoundation camera index")
+    selector.add_argument("--id", help="Exact native ID or usb:VID:PID:SERIAL")
+    selector.add_argument("--location", help="USB location, e.g. 0x14200000")
+    properties.add_argument(
+        "--list", action="store_true", help="List cameras without USB control reads"
+    )
+    properties.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     tag = sub.add_parser("tag-session", help="Record a verified camera ID in one saved session")
     tag.add_argument("session")
     tag.add_argument("usb_id", help="usb:VID:PID:SERIAL from camera-id")
@@ -167,6 +178,16 @@ def main():
         raise SystemExit(launch(session))
     if args.command == "camera-id":
         print(json.dumps(usb_devices(), indent=2))
+    if args.command == "camera-properties":
+        from .camera_properties import format_report, inspect_cameras
+
+        try:
+            report = inspect_cameras(
+                index=args.camera, camera_id=args.id, location=args.location, list_only=args.list
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(report, indent=2) if args.json else format_report(report))
     if args.command == "tag-session":
         if not args.verified_from_preview:
             parser.error("Verify the saved preview, then pass --verified-from-preview")

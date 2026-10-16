@@ -84,6 +84,50 @@ Single-camera mode hides the second view and measurement controls. Intrinsics de
 
 ## Other useful commands
 
+### Inspect connected cameras (macOS)
+
+```bash
+# List camera indices, native IDs and available USB IDs/locations
+uv run python run.py camera-properties --list
+# Read formats and standard camera control values for every camera
+uv run python run.py camera-properties
+# Select one camera (use the IDs/locations printed by --list)
+uv run python run.py camera-properties --camera 0
+uv run python run.py camera-properties --id 'usb:046d:0825:YOUR_SERIAL'
+uv run python run.py camera-properties --id '0x14200000046d0825'
+uv run python run.py camera-properties --location 0x14200000
+# Save a machine-readable snapshot
+uv run python run.py camera-properties --json > /tmp/camera-properties.json
+```
+
+The command reads AVFoundation device formats (resolution, pixel format and supported
+FPS ranges), focus/exposure/white-balance modes when available, and standard USB Video
+Class (UVC) controls advertised by each USB camera: brightness, contrast, exposure,
+gain, focus, zoom, white balance, and others. For UVC controls it reports current,
+minimum, maximum, resolution and default values when the device permits those reads.
+`exposure_absolute` uses **100 microsecond units**; other numeric values are UVC device
+units unless labelled. `resolution` is the UVC GET_RES result (usually a step; for
+`auto_exposure_mode` it is a supported-mode bitmask). Compound controls retain raw
+bytes or named components. Vendor extension controls are not decoded.
+
+This is a read-only snapshot: it does not start a video stream, set controls, detach
+drivers, or change USB configurations. `active_format` describes AVFoundation's current
+device format; it does not measure a stream's actual output resolution or FPS.
+Unavailable reads appear as `null` with an error; unsupported controls are omitted.
+Built-in, Continuity and virtual cameras may expose formats/modes without USB controls.
+An inaccessible USB backend does not prevent native camera discovery.
+
+Indices use the pinned OpenCV 4.12 AVFoundation enumeration and can change after
+reconnection. USB association requires an exact native ID encoding the location,
+vendor and product; unmatched USB devices retain an unknown capture index. Use the
+preview confirmation workflow before recording calibration provenance. Serial-less
+USB cameras can be selected by location. The existing `camera-id` command is unchanged.
+The added PyUSB and packaged libusb dependencies are installed from wheels by `uv`.
+
+Implementation references: [OpenCV's macOS device ordering and property support](https://github.com/opencv/opencv/blob/4.12.0/modules/videoio/src/cap_avfoundation_mac.mm),
+[PyUSB control transfers](https://github.com/pyusb/pyusb/blob/v1.3.1/usb/core.py),
+and [packaged libusb](https://github.com/pyocd/libusb-package).
+
 ```bash
 # Replay an ideal synthetic example without cameras
 uv run python run.py gui --session examples/synthetic
