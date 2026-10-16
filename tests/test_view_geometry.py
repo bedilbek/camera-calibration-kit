@@ -9,7 +9,14 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from calibration_demo.geometry import Rig, project
-from calibration_demo.view_geometry import camera_outline, look_at, observer_pose, rig_frame
+from calibration_demo.view_geometry import (
+    camera_outline,
+    ground_grid,
+    ground_projection,
+    look_at,
+    observer_pose,
+    rig_frame,
+)
 
 
 @pytest.fixture
@@ -26,8 +33,8 @@ def test_lens_centers_and_metric_observer_offsets(rig):
     np.testing.assert_allclose(rig.R @ centers[1] + rig.T.reshape(3), 0, atol=1e-12)
     eye, _, _ = observer_pose(rig)
     offset = eye - centers.mean(axis=0)
-    assert np.dot(offset, up) == pytest.approx(0.7)
-    assert np.dot(offset, forward) == pytest.approx(-0.7)
+    assert np.dot(offset, up) == pytest.approx(1.1)
+    assert np.dot(offset, forward) == pytest.approx(-1.1)
     assert np.dot(up, forward) == pytest.approx(0)
     target = np.array([0.2, -0.1, 2.0])
     rotation = look_at(eye, target, up)
@@ -71,10 +78,11 @@ def test_perspective_fit_offsets_and_missing_marker_lifecycle(rig, tmp_path):
     view.yaw = 0.3
     view.fit()
     np.testing.assert_allclose(view.pose()[0], eye)
-    window.observer_offsets[0].setValue(90)
+    assert window.observer_distance.value() == 110
+    window.observer_distance.setValue(140)
     centers, up, forward = rig_frame(rig)
-    np.testing.assert_allclose(view.pose()[0], centers.mean(axis=0) - 0.9 * forward + 0.7 * up)
-    window.observer_offsets[0].setValue(70)
+    np.testing.assert_allclose(view.pose()[0], centers.mean(axis=0) - 1.4 * forward + 1.4 * up)
+    window.observer_distance.setValue(110)
     app.processEvents()
     assert window.grab().save(str(tmp_path / "observer-view.png"))
     view.set_result(None, (2, 0))
@@ -82,3 +90,22 @@ def test_perspective_fit_offsets_and_missing_marker_lifecycle(rig, tmp_path):
     view.set_rig(rig)
     assert view.center is None and view.result is None
     window.close()
+
+
+def test_ground_height_footprints_and_grid_follow_shared_value(rig):
+    centers, up, _ = rig_frame(rig)
+    points = np.array([[0.2, -0.3, 1.8], [0.5, 0.4, 2.0]])
+    feet, heights = ground_projection(rig, points)
+    np.testing.assert_allclose(heights, [1.4, 0.7])
+    np.testing.assert_allclose((feet - centers[0]) @ up, -1.1)
+    np.testing.assert_allclose(points - feet, heights[:, None] * up)
+    new_feet, new_heights = ground_projection(rig, points, 1.4)
+    np.testing.assert_allclose(new_heights - heights, 0.3)
+    np.testing.assert_allclose(new_feet - feet, np.tile(-0.3 * up, (2, 1)))
+    for markers in (points, []):
+        corners, lines, step_m = ground_grid(rig, markers)
+        np.testing.assert_allclose((corners - centers[0]) @ up, -1.1)
+        assert step_m == 0.5
+        assert 2 <= len(lines) <= 84
+    _, _, step_m = ground_grid(rig, [[100, 0, 100]])
+    assert step_m > 0.5

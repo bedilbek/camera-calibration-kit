@@ -6,7 +6,7 @@ from time import monotonic
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,7 +26,14 @@ from PySide6.QtWidgets import (
 )
 
 from .live import LiveWorker, load_live_rig
-from .view_geometry import camera_outline, look_at, observer_pose, rig_frame
+from .view_geometry import (
+    camera_outline,
+    ground_grid,
+    ground_projection,
+    look_at,
+    observer_pose,
+    rig_frame,
+)
 
 
 class SegmentView(QWidget):
@@ -39,7 +46,7 @@ class SegmentView(QWidget):
         self.rig = None
         self.ids = (0, 1)
         self.center = None
-        self.behind_m = self.above_m = 0.7
+        self.distance_m = 1.1
         self.yaw = self.pitch = 0.0
         self.fov_deg = 65.0
         self.drag = None
@@ -58,14 +65,14 @@ class SegmentView(QWidget):
             self.fit()
         self.update()
 
-    def set_offsets(self, behind_m, above_m):
-        self.behind_m, self.above_m = behind_m, above_m
+    def set_distance(self, distance_m):
+        self.distance_m = distance_m
         self.yaw = self.pitch = 0.0
         self.fit()
 
     def pose(self):
         eye, up, forward = observer_pose(
-            self.rig, self.behind_m, self.above_m, self.yaw, self.pitch
+            self.rig, self.distance_m, self.distance_m, self.yaw, self.pitch
         )
         centers, _, _ = rig_frame(self.rig)
         target = self.center if self.center is not None else centers.mean(axis=0) + forward
@@ -75,13 +82,14 @@ class SegmentView(QWidget):
         points = np.vstack([camera_outline(self.rig, i) for i in (0, 1)])
         if self.result:
             points = np.vstack([points, self.result["points_left_frame_m"]])
-        return points
+        corners, _, _ = ground_grid(self.rig, points, self.distance_m)
+        return np.vstack([points, corners])
 
     def fit(self):
         self.yaw = self.pitch = 0.0
-        if self.result:
-            self.center = np.asarray(self.result["points_left_frame_m"]).mean(axis=0)
         if self.rig is not None:
+            points = self.scene_points()
+            self.center = (points.min(axis=0) + points.max(axis=0)) / 2
             eye, rotation = self.pose()
             xyz = (rotation @ (self.scene_points() - eye).T).T
             visible = xyz[xyz[:, 2] > 0.01]
@@ -115,7 +123,7 @@ class SegmentView(QWidget):
         p.drawText(
             18,
             49,
-            f"Preset: {self.behind_m * 100:.0f} cm behind / {self.above_m * 100:.0f} cm above",
+            f"Preset: {self.distance_m * 100:.0f} cm behind / above · left lens height {self.distance_m * 100:.0f} cm",
         )
         p.drawText(
             18, self.height() - 18, "Drag to orbit · Wheel to zoom · Fit 3D view restores observer"
@@ -126,8 +134,9 @@ class SegmentView(QWidget):
             )
             return
         # Keep geometry and labels out of the view captions.
-        p.setClipRect(QRectF(0, 60, self.width(), max(self.height() - 95, 1)))
+        p.setClipRect(QRectF(0, 60, self.width(), max(self.height() - 115, 1)))
         centers, _, _ = rig_frame(self.rig)
+        self.draw_ground(p, centers)
         a, b = [self.screen(point) for point in centers]
         p.setPen(QPen(QColor("#6b8197"), 1, Qt.PenStyle.DashLine))
         if a is not None and b is not None:
@@ -155,17 +164,58 @@ class SegmentView(QWidget):
             return
         p.setPen(QPen(QColor("#f5d474"), 3))
         p.drawLine(a, b)
-        for marker_id, pos, color in zip(self.ids, (a, b), ("#6ae4c5", "#7eb9ff")):
+        for index, (marker_id, pos, color) in enumerate(
+            zip(self.ids, (a, b), ("#6ae4c5", "#7eb9ff"))
+        ):
             p.setBrush(QColor(color))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawEllipse(pos, 8, 8)
             p.setPen(QColor("#eef5ff"))
-            p.drawText(pos + QPointF(12, 22), f"ID {marker_id}")
+            text = f"ID {marker_id}"
+            dx = -p.fontMetrics().horizontalAdvance(text) - 12 if index == 0 else 12
+            p.drawText(pos + QPointF(dx, 20), text)
         midpoint = (a + b) / 2
         box = QRectF(midpoint.x() - 65, midpoint.y() - 34, 130, 26)
         p.fillRect(box, QColor("#25384d"))
         p.setPen(QColor("#ffffff"))
         p.drawText(box, Qt.AlignmentFlag.AlignCenter, f"{self.result['length_m'] * 100:.0f} cm")
+
+    def draw_ground(self, painter, centers):
+        markers = self.result["points_left_frame_m"] if self.result else []
+        corners, lines, step_m = ground_grid(self.rig, markers, self.distance_m)
+        projected = [self.screen(point) for point in corners]
+        if all(point is not None for point in projected):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#1b3040"))
+            painter.drawPolygon(QPolygonF(projected))
+        painter.setPen(QPen(QColor("#355063"), 1))
+        for start, end in lines:
+            a, b = self.screen(start), self.screen(end)
+            if a is not None and b is not None:
+                painter.drawLine(a, b)
+        # Dashed verticals connect lenses and markers to their ground footprints.
+        for index, point in enumerate(np.vstack([centers, np.asarray(markers).reshape(-1, 3)])):
+            foot, height = ground_projection(self.rig, point, self.distance_m)
+            a, b = self.screen(point), self.screen(foot)
+            if a is None or b is None:
+                continue
+            color = QColor("#6b8197" if index < 2 else "#d7c38b")
+            painter.setPen(QPen(color, 1, Qt.PenStyle.DashLine))
+            painter.drawLine(a, b)
+            painter.setBrush(color)
+            painter.drawEllipse(b, 3, 3)
+            if index >= 2:
+                text = f"{height * 100:.0f} cm"
+                dx = -painter.fontMetrics().horizontalAdvance(text) - 10 if index == 2 else 10
+                painter.drawText((a + b) / 2 + QPointF(dx, 0), text)
+        painter.setClipping(False)
+        painter.setPen(QColor("#8da6b9"))
+        painter.drawText(
+            18,
+            self.height() - 39,
+            f"Assumed ground · grid {step_m * 100:g} cm · dashed verticals show height",
+        )
+        painter.setClipRect(QRectF(0, 60, self.width(), max(self.height() - 115, 1)))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -272,17 +322,17 @@ class LiveWindow(QMainWindow):
         splitter.setSizes([540, 700])
         layout.addWidget(splitter, 1)
         observer_controls = QHBoxLayout()
-        self.observer_offsets = []
-        for title in ("Observer behind", "Observer above"):
-            observer_controls.addWidget(QLabel(title))
-            field = QDoubleSpinBox()
-            field.setRange(5, 500)
-            field.setValue(70)
-            field.setSuffix(" cm")
-            field.valueChanged.connect(self.update_observer)
-            observer_controls.addWidget(field)
-            self.observer_offsets.append(field)
-        observer_controls.addWidget(QLabel("Ground-up assumes level cameras"))
+        observer_controls.addWidget(QLabel("Observer offset / camera height"))
+        self.observer_distance = QDoubleSpinBox()
+        self.observer_distance.setRange(5, 500)
+        self.observer_distance.setValue(110)
+        self.observer_distance.setSuffix(" cm")
+        self.observer_distance.setToolTip(
+            "Sets observer distance behind and above the lens midpoint, and assumed left lens height above ground."
+        )
+        self.observer_distance.valueChanged.connect(self.update_observer)
+        observer_controls.addWidget(self.observer_distance)
+        observer_controls.addWidget(QLabel("Level cameras assumed · height anchored to left lens"))
         observer_controls.addStretch()
         layout.addLayout(observer_controls)
         self.status = QLabel("Load a sequential rig, select camera indices and two AprilTag IDs.")
@@ -299,7 +349,7 @@ class LiveWindow(QMainWindow):
         self.timer.start()
 
     def update_observer(self, *_):
-        self.view.set_offsets(*(field.value() / 100 for field in self.observer_offsets))
+        self.view.set_distance(self.observer_distance.value() / 100)
 
     def browse(self, key):
         path, _ = QFileDialog.getOpenFileName(

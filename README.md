@@ -164,16 +164,21 @@ between marker centers**, not an individual marker's edge length.
 
 The perspective 3D view shows both calibrated camera lenses and short viewing frustums,
 the camera separation, and both reconstructed marker centers with their connecting segment
-and distance rounded to whole centimetres. Its observer starts **70 cm behind and 70 cm
-above the midpoint between the lenses**, looking toward the marker midpoint. For now,
+and distance rounded to whole centimetres. Its observer starts **110 cm behind and 110 cm
+above the midpoint between the lenses**, looking toward the center of the cameras, markers and ground patch. For now,
 **both cameras are assumed level**: their average optical up defines ground-up, and their
 average viewing direction projected onto that assumed ground plane defines forward.
-No floor height or gravity direction is measured. All geometry uses the left camera's
+The assumed ground lies **110 cm below the left camera lens**. Its grid and dashed
+marker-to-ground lines show each marker's height above this assumed plane. The right
+camera retains its calibrated relative height; no camera pose is moved to force equal
+heights. No floor height or gravity direction is measured. All geometry uses the left camera's
 coordinate system (X right, Y down, Z forward); the right lens is at `-R.T @ T`.
 
-Adjust **Observer behind/above** in centimetres. Drag to orbit and use the wheel to change
+Adjust the single **Observer offset / camera height** field (default **110 cm**) to
+change all three distances together: observer behind, observer above the lens midpoint,
+and left camera height above ground. Drag to orbit and use the wheel to change
 the field of view. **Fit 3D view** restores the observer position and frames the cameras
-and current markers by changing the field of view, without moving the observer farther
+the ground patch and current markers by changing the field of view, without moving the observer farther
 away. Frustum outlines illustrate each lens's calibrated corner rays at a short 25 cm
 depth, not its maximum range. The view holds its aim as targets move until Fit is pressed.
 Missing tags, invalid triangulation,
